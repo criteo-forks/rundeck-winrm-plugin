@@ -68,8 +68,10 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
     public static final String WINRM_PORT = "winrm-port";
     public static final String WINRM_AUTH_TYPE = "winrm-auth-type";
     public static final String WINRM_CERT_TRUST = "winrm-cert-trust";
+    public static final String WINRM_CERT = "winrm-cert";
     public static final String WINRM_HOSTNAME_TRUST = "winrm-hostname-trust";
     public static final String WINRM_PROTOCOL = "winrm-protocol";
+    public static final String AUTH_TYPE_CERTIFICATE = "certificate";
     public static final String AUTH_TYPE_KERBEROS = "kerberos";
     public static final String AUTH_TYPE_BASIC = "basic";
     public static final String WINRM_PROTOCOL_HTTPS = "https";
@@ -112,6 +114,7 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
     public static final String CONFIG_HOSTNAME_VERIFY = "hostnameVerify";
     public static final String CONFIG_SPN_ADD_PORT = "spnAddPort";
     public static final String CONFIG_SPN_USE_HTTP = "spnUseHttp";
+    public static final String CONFIG_CERT = "clientCertificate";
     public static final String CONFIG_LOCALE = "locale";
     public static final String CONFIG_WINRM_TIMEOUT = "winrmTimeout";
     private static final String CONFIG_TIMEOUT = "timeout";
@@ -131,7 +134,7 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
             .description("Executes a command on a remote windows node via WinRM.")
             .property(PropertyUtil.select(CONFIG_AUTHENTICATION, "Authentication",
                     "Authentication mechanism to use",
-                    true, DEFAULT_AUTH_TYPE, Arrays.asList(AUTH_TYPE_KERBEROS, AUTH_TYPE_BASIC)))
+                    true, DEFAULT_AUTH_TYPE, Arrays.asList(AUTH_TYPE_KERBEROS, AUTH_TYPE_BASIC, AUTH_TYPE_CERTIFICATE)))
 
             .property(PropertyUtil.select(CONFIG_PROTOCOL, "WinRM Protocol",
                     "HTTP Protocol",
@@ -157,6 +160,9 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
             .property(PropertyUtil.bool(CONFIG_SPN_USE_HTTP, "SPN uses HTTP",
                     "If true, use HTTP instead of WSMAN for the SPN used for Kerberos Authentication.",
                     true, "false"))
+
+            .property(PropertyUtil.string(CONFIG_CERT, "Client Certificate to use",
+                    "Locale, default: null.", false, null))
 
             .property(PropertyUtil.string(CONFIG_LOCALE, "WinRM Locale",
                     "Locale, default: en-us.", false, null))
@@ -197,6 +203,7 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
             .mapping(CONFIG_SPN_ADD_PORT, PROJ_PROP_PREFIX + WINRM_SPN_ADD_PORT)
             .mapping(CONFIG_SPN_USE_HTTP, PROJ_PROP_PREFIX + WINRM_SPN_USE_HTTP)
             .mapping(CONFIG_LOCALE, PROJ_PROP_PREFIX + WINRM_LOCALE)
+            .mapping(CONFIG_CERT, PROJ_PROP_PREFIX + WINRM_CERT)
             .mapping(CONFIG_WINRM_TIMEOUT, PROJ_PROP_PREFIX + WINRM_TIMEOUT)
             .mapping(CONFIG_TIMEOUT, PROJ_PROP_PREFIX + WINRM_CONNECTION_TIMEOUT_PROPERTY)
             .mapping(CONFIG_PASSWORD_STORAGE_PATH, PROJ_PROP_PREFIX + WINRM_PASSWORD_STORAGE_PATH)
@@ -597,6 +604,10 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
                     getFramework());
         }
 
+        public String getWinrmCert() {
+            return resolveProperty(WINRM_CERT, null, getNode(), getFrameworkProject(), getFramework());
+        }
+
         public String getWinrmLocale() {
             return resolveProperty(WINRM_LOCALE, null, getNode(), getFrameworkProject(), getFramework());
         }
@@ -627,8 +638,9 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
             final ConnectionOptions options = new ConnectionOptions();
             final String authType = getAuthType();
             final boolean isHttps = WINRM_PROTOCOL_HTTPS.equalsIgnoreCase(getProtocol());
-
+            final boolean isCertificate = AUTH_TYPE_CERTIFICATE.equals(authType);
             final boolean isKerberos = getUsername().indexOf("@") > 0 || AUTH_TYPE_KERBEROS.equals(authType);
+
 
             String username;
             if (isKerberos) {
@@ -637,18 +649,30 @@ public class OTWinRMNodeExecutor implements NodeExecutor, Describable {
                 options.set(CifsConnectionBuilder.WINRM_KERBEROS_ADD_PORT_TO_SPN, isWinrmSpnAddPort());
                 options.set(CifsConnectionBuilder.WINRM_KERBEROS_USE_HTTP_SPN, isWinrmSpnUseHttp());
                 options.set(CifsConnectionBuilder.WINRM_KERBEROS_TICKET_CACHE, isKerberosCacheEnabled());
+            } else if (isCertificate) {
+                username = getWinrmCert();
             } else {
                 username = getUsername();
             }
-            final String password = getClearAuthPassword(this);
-            final boolean valid = null != password && !"".equals(password);
-            if (!valid) {
-                throw new ConfigurationException("Password was not set");
+
+            String password;
+            if (isCertificate) {
+                password = "import"; // some Java versions fail on empty password
+            } else {
+                password = getClearAuthPassword(this);
+                final boolean valid = null != password && !"".equals(password);
+                if (!valid) {
+                    throw new ConfigurationException("Password was not set");
+                }
             }
 
             if (isHttps) {
                 options.set(CifsConnectionBuilder.WINRM_HTTPS_CERTIFICATE_TRUST_STRATEGY, getCertTrustStrategy());
                 options.set(CifsConnectionBuilder.WINRM_HTTPS_HOSTNAME_VERIFICATION_STRATEGY, getHostTrust());
+            }
+
+            if (isCertificate) {
+                options.set(CifsConnectionBuilder.WINRM_CLIENT_CERTIFICATE, isCertificate);
             }
 
             options.set(ADDRESS, getHostname());
